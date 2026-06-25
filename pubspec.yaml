@@ -1,7 +1,8 @@
 name: summer_plugin
-description: "A new Flutter plugin project."
+description: 'A new Flutter plugin project.'
 version: 0.0.1
-homepage:
+homepage: https://github.com/summer-zhp/summer_plugin.git
+repository: https://github.com/your-username/summer_plugin
 
 environment:
   sdk: ^3.9.2
