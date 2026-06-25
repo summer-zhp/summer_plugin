@@ -2,8 +2,20 @@
 
 ## 1.0.1
 
-本次更新未涉及任何功能代码的改动，只对变更日志本身做了调整：将原先以条目列表方式罗列的版本记录改写为整段的叙述文字，使每个版本的变更脉络读起来更加连贯，也更容易从中了解组件的整体演进过程。属于文档层面的格式优化。
+No functional code changes in this release. The changelog format itself was updated — the previous list-style version entries were rewritten into flowing narrative paragraphs, making it easier to follow the evolution of the component across releases. This is a documentation-only formatting improvement.
 
 ## 1.0.0
 
-首个稳定版本，正式提供核心数据表格组件 SummerDataTable。该版本采用纵向 ListView.builder 虚拟滚动配合横向单一 RenderBox 平移的实现方案，在不引入自定义绘制循环的前提下兼顾了渲染性能与可维护性，并一次性内置了实际开发中高频使用的完整能力，涵盖固定表头与左右固定列、单列及多列排序（支持 Shift 多列叠加与优先级标识）、列筛选下拉、复选框与单选的行选择、行展开详情面板、列宽拖拽调整、文本省略号与 Tooltip、树形与层级数据、表头分组（合并表头），以及加载态、空态和分页等配套能力，同时支持通过主题对整体样式进行定制。
+First stable release. Introduces the core data table component `SummerDataTable`. Built on a vertical `ListView.builder` for virtual scrolling and a single horizontal `RenderBox` for panning, it achieves solid rendering performance and maintainability without a custom paint loop. Ships with a comprehensive set of commonly needed features out of the box:
+
+- Fixed header row and pinned left/right columns
+- Single- and multi-column sorting (Shift-click to stack, with priority indicators)
+- Column filter dropdowns
+- Row selection via checkbox or radio
+- Expandable row detail panels
+- Column width drag-to-resize
+- Text ellipsis with tooltip
+- Tree and hierarchical data support
+- Grouped (merged) table headers
+- Loading, empty, and pagination states
+- Theme-based style customization
