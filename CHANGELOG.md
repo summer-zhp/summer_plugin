@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 1.0.2
+
+Changelog formatting update: rewritten from Chinese to English to improve readability on pub.dev.
+
 ## 1.0.1
 
 No functional code changes in this release. The changelog format itself was updated — the previous list-style version entries were rewritten into flowing narrative paragraphs, making it easier to follow the evolution of the component across releases. This is a documentation-only formatting improvement.
