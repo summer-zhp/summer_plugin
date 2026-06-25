@@ -1,0 +1,204 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1782359931169,
+  "projectRoot": "/Users/zhanghuapeng/Desktop/test/flutter_pub_test/summer_plugin",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "lib",
+      "test"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "android": {
+      "path": "android",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1782359931105,
+      "keyFiles": [
+        "build.gradle",
+        "local.properties",
+        "settings.gradle",
+        "summer_plugin_android.iml"
+      ]
+    },
+    "build": {
+      "path": "build",
+      "purpose": "Build output",
+      "fileCount": 0,
+      "lastAccessed": 1782359931105,
+      "keyFiles": []
+    },
+    "example": {
+      "path": "example",
+      "purpose": null,
+      "fileCount": 7,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "README.md",
+        "analysis_options.yaml",
+        "pubspec.lock",
+        "pubspec.yaml",
+        "summer_plugin_example.iml"
+      ]
+    },
+    "ios": {
+      "path": "ios",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "summer_plugin.podspec"
+      ]
+    },
+    "lib": {
+      "path": "lib",
+      "purpose": "Library code",
+      "fileCount": 3,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "summer_plugin.dart",
+        "summer_plugin_method_channel.dart",
+        "summer_plugin_platform_interface.dart"
+      ]
+    },
+    "test": {
+      "path": "test",
+      "purpose": "Test files",
+      "fileCount": 4,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "summer_data_table_features_test.dart",
+        "summer_data_table_test.dart",
+        "summer_plugin_method_channel_test.dart",
+        "summer_plugin_test.dart"
+      ]
+    },
+    "windows": {
+      "path": "windows",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "CMakeLists.txt",
+        "summer_plugin.cpp",
+        "summer_plugin.h",
+        "summer_plugin_c_api.cpp"
+      ]
+    },
+    "android/src": {
+      "path": "android/src",
+      "purpose": "Source code",
+      "fileCount": 0,
+      "lastAccessed": 1782359931106,
+      "keyFiles": []
+    },
+    "example/build": {
+      "path": "example/build",
+      "purpose": "Build output",
+      "fileCount": 1,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "7e4aebe516b998635f34742713e086a8.cache.dill.track.dill"
+      ]
+    },
+    "ios/Assets": {
+      "path": "ios/Assets",
+      "purpose": "Static assets",
+      "fileCount": 1,
+      "lastAccessed": 1782359931106,
+      "keyFiles": []
+    },
+    "windows/test": {
+      "path": "windows/test",
+      "purpose": "Test files",
+      "fileCount": 1,
+      "lastAccessed": 1782359931106,
+      "keyFiles": [
+        "summer_plugin_test.cpp"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "lib/table/summer_data_table.dart",
+      "accessCount": 6,
+      "lastAccessed": 1782360809052,
+      "type": "file"
+    },
+    {
+      "path": "lib/table/summer_data_column.dart",
+      "accessCount": 2,
+      "lastAccessed": 1782360622407,
+      "type": "file"
+    },
+    {
+      "path": "example/lib/main.dart",
+      "accessCount": 2,
+      "lastAccessed": 1782360960982,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 2,
+      "lastAccessed": 1782365959263,
+      "type": "file"
+    },
+    {
+      "path": "lib/table/summer_data_cell.dart",
+      "accessCount": 1,
+      "lastAccessed": 1782360288820,
+      "type": "file"
+    },
+    {
+      "path": "test/summer_data_table_groups_test.dart",
+      "accessCount": 1,
+      "lastAccessed": 1782360886173,
+      "type": "file"
+    },
+    {
+      "path": "pubspec.yaml",
+      "accessCount": 1,
+      "lastAccessed": 1782365630408,
+      "type": "file"
+    },
+    {
+      "path": "LICENSE",
+      "accessCount": 1,
+      "lastAccessed": 1782365823475,
+      "type": "file"
+    },
+    {
+      "path": "lib/table/summer_data_table_theme.dart",
+      "accessCount": 1,
+      "lastAccessed": 1782365927126,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

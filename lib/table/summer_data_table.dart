@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
 import 'summer_data_cell.dart';
@@ -12,29 +13,39 @@ import 'summer_data_table_source.dart';
 import 'summer_data_table_theme.dart';
 import 'summer_expandable.dart';
 import 'summer_row_selection.dart';
+import 'summer_tree_table_source.dart';
 
-/// Signature for controlled sort changes.
+/// Signature for controlled single-column sort changes.
 ///
-/// [columnKey] is `null` when sorting is cancelled. [ascending] is the
-/// requested direction.
+/// [columnKey] is `null` when sorting is cancelled.
 typedef SummerSortChange = void Function(String? columnKey, bool ascending);
+
+/// Signature for controlled multi-column sort changes.
+typedef SummerMultiSortChange = void Function(List<SummerSortSpec> columns);
+
+/// Signature for controlled per-column filter changes.
+typedef SummerFilterChange = void Function(
+    String columnKey, List<Object?> values);
 
 /// A high-performance, antd/naive-style data table.
 ///
 /// Design highlights
 /// * **Vertical virtualization** via `ListView.builder` — only visible rows are
 ///   built, with momentum physics, scrollbar and mouse-wheel for free.
-/// * **Horizontal scroll** via a shared offset notifier + `Transform.translate`;
-///   pinned columns are rendered as non-translated siblings so they freeze.
-/// * **Fixed header**, **fixed left/right columns**, **controlled sorting**,
-///   **row selection**, **expandable rows**, **column resize**, **ellipsis +
-///   tooltip**, **hover/selection highlight**, **loading/empty states**,
-///   **pagination**.
+/// * **Horizontal scroll** via a shared offset notifier driving a single
+///   render-object translate ([_XTranslatedBox]) — X scrolling repaints without
+///   rebuilding any cell widget. Pinned columns are non-translated siblings.
+/// * **Fixed header**, **fixed left/right columns**, **single + multi-column
+///   sorting** (Shift+click), **row selection**, **expandable rows**,
+///   **column resize**, **column filtering dropdown**, **tree/hierarchical
+///   data**, **ellipsis + tooltip**, **hover/selection highlight**,
+///   **loading/empty states**, **pagination**.
 class SummerDataTable extends StatefulWidget {
   /// Column definitions.
   final List<SummerDataColumn> columns;
 
   /// Data source (owned by the caller; call `notifyListeners` on change).
+  /// Use a [SummerTreeTableSource] to enable tree mode.
   final SummerDataTableSource source;
 
   /// Theme overrides. Falls back to [SummerDataTableTheme.of] then default.
@@ -61,20 +72,41 @@ class SummerDataTable extends StatefulWidget {
   /// Whether hovering a row highlights its background.
   final bool showHover;
 
-  /// Controlled: key of the active sort column, or `null` for "no sort".
+  // -- Single-column sort (controlled) -------------------------------------
+
+  /// Active sort column key, or `null`. Ignored when [onMultiSortChange] is set.
   final String? sortColumnKey;
 
-  /// Controlled: direction of the active sort. Ignored when [sortColumnKey]
-  /// is `null`.
+  /// Direction of the single active sort. Ignored when [sortColumnKey] is null.
   final bool sortAscending;
 
-  /// Called when the user cycles the sort on a sortable header.
+  /// Called when the user cycles a sortable header (single-sort mode).
   final SummerSortChange? onSortChange;
+
+  // -- Multi-column sort (controlled) --------------------------------------
+
+  /// Active multi-sort specs in priority order. Used when [onMultiSortChange]
+  /// is set (which also switches the header to multi-sort mode).
+  final List<SummerSortSpec>? sortColumns;
+
+  /// Called when the user changes the sort set. Enabling this activates
+  /// multi-sort (Shift+click to stack columns).
+  final SummerMultiSortChange? onMultiSortChange;
+
+  // -- Filtering (controlled) ----------------------------------------------
+
+  /// Selected filter values per column key.
+  final Map<String, List<Object?>>? filteredColumnValues;
+
+  /// Called when a column's filter selection is applied/reset.
+  final SummerFilterChange? onFilterChange;
+
+  // -- Selection / expansion ----------------------------------------------
 
   /// Row selection configuration. `null` disables selection.
   final SummerRowSelection? selection;
 
-  /// Expandable rows configuration. `null` disables expansion.
+  /// Expandable rows configuration (detail panel under a row). `null` disables.
   final SummerRowExpandable? expandable;
 
   /// Row interaction callbacks (index is the data row index).
@@ -107,6 +139,10 @@ class SummerDataTable extends StatefulWidget {
     this.sortColumnKey,
     this.sortAscending = true,
     this.onSortChange,
+    this.sortColumns,
+    this.onMultiSortChange,
+    this.filteredColumnValues,
+    this.onFilterChange,
     this.selection,
     this.expandable,
     this.onRowTap,
@@ -143,6 +179,12 @@ class _SummerDataTableState extends State<SummerDataTable>
   double _resizeStartW = 0;
   double _resizeStartX = 0;
 
+  // Filter dropdown overlay.
+  OverlayEntry? _filterEntry;
+
+  bool get _isMultiSort => widget.onMultiSortChange != null;
+  bool get _isTree => widget.source is SummerTreeTableSource;
+
   @override
   void initState() {
     super.initState();
@@ -162,6 +204,7 @@ class _SummerDataTableState extends State<SummerDataTable>
 
   @override
   void dispose() {
+    _closeFilter();
     widget.source.removeListener(_onSourceChanged);
     _fling?.dispose();
     _yController.dispose();
@@ -179,6 +222,22 @@ class _SummerDataTableState extends State<SummerDataTable>
 
   SummerDataTableThemeData get _theme =>
       widget.theme ?? SummerDataTableTheme.of(context);
+
+  /// Unified sort spec list derived from single- or multi-sort mode.
+  List<SummerSortSpec> get _effectiveSort {
+    if (_isMultiSort) return widget.sortColumns ?? const <SummerSortSpec>[];
+    final k = widget.sortColumnKey;
+    return k == null
+        ? const <SummerSortSpec>[]
+        : <SummerSortSpec>[SummerSortSpec(key: k, ascending: widget.sortAscending)];
+  }
+
+  SummerSortSpec? _specFor(String key) {
+    for (final s in _effectiveSort) {
+      if (s.key == key) return s;
+    }
+    return null;
+  }
 
   // --------------------------------------------------------------------------
   // Build
@@ -201,8 +260,7 @@ class _SummerDataTableState extends State<SummerDataTable>
       return SizedBox(
         height: widget.height,
         width: widget.width,
-        child: theme.emptyWidget ??
-            const Center(child: Text('暂无数据')),
+        child: theme.emptyWidget ?? const Center(child: Text('暂无数据')),
       );
     }
 
@@ -268,33 +326,14 @@ class _SummerDataTableState extends State<SummerDataTable>
       ));
     }
 
-    for (var i = 0; i < widget.columns.length; i++) {
-      final c = widget.columns[i];
-      final key = c.key ?? 'col_$i';
-      final alreadyResized = _resizedWidths.containsKey(key);
-      cols.add(_RCol(
-        key: key,
-        pin: c.pin,
-        // NaN marks flex columns resolved later.
-        width: alreadyResized
-            ? _resizedWidths[key]!
-            : (c.isFixed
-                ? c.width!.clamp(c.minWidth, c.maxWidth)
-                : double.nan),
-        fixed: c.isFixed || alreadyResized,
-        flex: c.flex,
-        minWidth: c.minWidth,
-        maxWidth: c.maxWidth,
-        sortable: c.sortable,
-        resizable: c.resizable,
-        ellipsis: c.ellipsis,
-        alignment: c.alignment,
-        padding: c.padding,
-        label: c.label,
-        userColumnIndex: i,
-        baseWidth: c.width ?? c.minWidth,
-      ));
+    // Build the header tree and collect user *leaf* columns in DFS order.
+    // `userColumnIndex` is the leaf index reported to `source.buildCell`.
+    final userLeaves = <_RCol>[];
+    final headerRoots = <_HNode>[];
+    for (final c in widget.columns) {
+      headerRoots.add(_buildHeaderNode(c, 0, userLeaves));
     }
+    cols.addAll(userLeaves);
 
     // Pinned columns must be fixed; give flex-pinned a default.
     for (final col in cols) {
@@ -303,14 +342,19 @@ class _SummerDataTableState extends State<SummerDataTable>
       }
     }
 
-    final leftW = cols
+    // Partition once (consumed by both header and every body row).
+    final left = cols
         .where((c) => c.pin == SummerColumnPin.left)
-        .fold<double>(0, (a, c) => a + c.width);
-    final rightW = cols
+        .toList(growable: false);
+    final right = cols
         .where((c) => c.pin == SummerColumnPin.right)
-        .fold<double>(0, (a, c) => a + c.width);
+        .toList(growable: false);
+    final middle = cols
+        .where((c) => c.pin == SummerColumnPin.none)
+        .toList(growable: false);
 
-    final middle = cols.where((c) => c.pin == SummerColumnPin.none).toList();
+    final leftW = left.fold<double>(0, (a, c) => a + c.width);
+    final rightW = right.fold<double>(0, (a, c) => a + c.width);
     final finiteAvail = avail.isFinite ? avail : leftW + rightW;
     final middleViewport = math.max(0.0, finiteAvail - leftW - rightW);
 
@@ -330,11 +374,88 @@ class _SummerDataTableState extends State<SummerDataTable>
       }
     }
 
-    final middleContent =
-        middle.fold<double>(0, (a, c) => a + c.width);
+    // Resolve header-node widths: leaves read the (now-resolved) leaf width;
+    // groups sum their descendants. Also compute header depth.
+    var depth = 1;
+    for (final r in headerRoots) {
+      _resolveNodeWidth(r);
+      depth = math.max(depth, _nodeDepth(r));
+    }
 
-    return _Layout(cols, leftW, rightW, middleViewport, middleContent);
+    final middleContent = middle.fold<double>(0, (a, c) => a + c.width);
+
+    return _Layout(cols, left, right, middle, headerRoots, depth, leftW,
+        rightW, middleViewport, middleContent);
   }
+
+  /// Recursively builds the header tree, appending each user leaf column to
+  /// [outLeaves] in display (DFS) order.
+  _HNode _buildHeaderNode(
+      SummerDataColumn c, int level, List<_RCol> outLeaves) {
+    if (c.children.isEmpty) {
+      final forceMiddle = level > 0; // nested leaves can't be pinned
+      final leafIndex = outLeaves.length;
+      final key = c.key ?? 'col_$leafIndex';
+      final alreadyResized = _resizedWidths.containsKey(key);
+      final leaf = _RCol(
+        key: key,
+        pin: forceMiddle ? SummerColumnPin.none : c.pin,
+        // NaN marks flex columns resolved later.
+        width: alreadyResized
+            ? _resizedWidths[key]!
+            : (c.isFixed
+                ? c.width!.clamp(c.minWidth, c.maxWidth)
+                : double.nan),
+        fixed: c.isFixed || alreadyResized,
+        flex: c.flex,
+        minWidth: c.minWidth,
+        maxWidth: c.maxWidth,
+        sortable: c.sortable,
+        sortDirections: c.sortDirections,
+        resizable: c.resizable,
+        ellipsis: c.ellipsis,
+        alignment: c.alignment,
+        padding: c.padding,
+        label: c.label,
+        filters: c.filters,
+        filterMultiple: c.filterMultiple,
+        userColumnIndex: leafIndex,
+        baseWidth: c.width ?? c.minWidth,
+      );
+      outLeaves.add(leaf);
+      return _HNode.leaf(leaf, c.label, level, key);
+    }
+    final childNodes = <_HNode>[
+      for (final child in c.children) _buildHeaderNode(child, level + 1, outLeaves),
+    ];
+    return _HNode.group(
+        childNodes, c.label, level, c.key ?? 'group:$level:${childNodes.length}');
+  }
+
+  double _resolveNodeWidth(_HNode n) {
+    if (n.isLeaf) {
+      n.width = n.leaf!.width;
+      return n.width;
+    }
+    var sum = 0.0;
+    for (final c in n.children) {
+      sum += _resolveNodeWidth(c);
+    }
+    n.width = sum;
+    return sum;
+  }
+
+  int _nodeDepth(_HNode n) {
+    if (n.isLeaf) return 1;
+    var d = 0;
+    for (final c in n.children) {
+      d = math.max(d, _nodeDepth(c));
+    }
+    return d + 1;
+  }
+
+  bool _nodeIsMiddle(_HNode n) =>
+      !n.isLeaf || n.leaf!.pin == SummerColumnPin.none;
 
   // --------------------------------------------------------------------------
   // Header
@@ -342,51 +463,121 @@ class _SummerDataTableState extends State<SummerDataTable>
 
   Widget _buildHeader(SummerDataTableThemeData theme) {
     final layout = _layout!;
+    final totalH = theme.headerHeight * layout.depth;
+    final sort = _effectiveSort; // resolved once per header build
     return SizedBox(
-      height: theme.headerHeight,
+      height: totalH,
       child: Row(
         children: <Widget>[
-          for (final c in layout.left) _buildHeaderCell(c, theme),
-          Expanded(child: _buildHeaderMiddle(theme)),
-          for (final c in layout.right) _buildHeaderCell(c, theme),
+          for (final c in layout.left) _buildLeafHeaderCell(c, theme, sort, totalH),
+          Expanded(child: _buildHeaderMiddle(theme, sort, totalH)),
+          for (final c in layout.right) _buildLeafHeaderCell(c, theme, sort, totalH),
         ],
       ),
     );
   }
 
-  Widget _buildHeaderMiddle(SummerDataTableThemeData theme) {
+  Widget _buildHeaderMiddle(SummerDataTableThemeData theme,
+      List<SummerSortSpec> sort, double totalH) {
     final layout = _layout!;
     return SizedBox(
-      height: theme.headerHeight,
+      height: totalH,
       child: ClipRect(
         child: OverflowBox(
           minWidth: layout.middleContent,
           maxWidth: layout.middleContent,
           alignment: Alignment.centerLeft,
-          child: ListenableBuilder(
-            listenable: _xOffset,
-            builder: (context, _) {
-              final x = _xOffset.value.clamp(0.0, layout.maxX);
-              return Transform.translate(
-                offset: Offset(-x, 0),
-                child: SizedBox(
-                  width: layout.middleContent,
-                  child: Row(
-                    children: <Widget>[
-                      for (final c in layout.middle) _buildHeaderCell(c, theme),
-                    ],
-                  ),
-                ),
-              );
-            },
+          child: _XTranslatedBox(
+            offset: _xOffset,
+            maxX: layout.maxX,
+            child: SizedBox(
+              width: layout.middleContent,
+              height: totalH,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children:
+                    _buildMiddleHeaderCells(layout.headerRoots, theme, sort),
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildHeaderCell(_RCol col, SummerDataTableThemeData theme) {
-    final isActive = col.sortable && widget.sortColumnKey == col.key;
+  /// Lays out the merged middle header as absolutely-positioned cells. A leaf
+  /// spans from its level down to the bottom row (rowspan = depth - level); a
+  /// group occupies a single row (rowspan = 1) and the width of its leaves.
+  List<Widget> _buildMiddleHeaderCells(List<_HNode> roots,
+      SummerDataTableThemeData theme, List<SummerSortSpec> sort) {
+    final cells = <Widget>[];
+    final hh = theme.headerHeight;
+    final depth = _layout!.depth;
+    var x = 0.0;
+    void walk(_HNode n) {
+      if (!_nodeIsMiddle(n)) return; // pinned leaf handled by the side row
+      if (n.isLeaf) {
+        final h = (depth - n.level) * hh;
+        cells.add(Positioned(
+          left: x,
+          top: n.level * hh,
+          width: n.width,
+          height: h,
+          child: _buildLeafHeaderCell(n.leaf!, theme, sort, h),
+        ));
+        x += n.width;
+      } else {
+        final startX = x;
+        // Group painted first so its descendants render on top of it.
+        cells.add(Positioned(
+          left: startX,
+          top: n.level * hh,
+          width: n.width,
+          height: hh,
+          child: _buildGroupHeaderCell(n, theme),
+        ));
+        for (final child in n.children) {
+          walk(child);
+        }
+        x = startX + n.width;
+      }
+    }
+
+    for (final r in roots) {
+      walk(r);
+    }
+    return cells;
+  }
+
+  Widget _buildGroupHeaderCell(_HNode n, SummerDataTableThemeData theme) {
+    return Container(
+      width: n.width,
+      height: theme.headerHeight,
+      decoration: BoxDecoration(
+        color: theme.headerBackgroundColor,
+        border: Border(
+          bottom: BorderSide(color: theme.borderColor, width: theme.borderWidth),
+          right: widget.bordered
+              ? BorderSide(color: theme.borderColor, width: theme.borderWidth)
+              : BorderSide.none,
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      alignment: Alignment.center,
+      child: DefaultTextStyle(
+        style: theme.headerTextStyle,
+        child: n.label,
+      ),
+    );
+  }
+
+  Widget _buildLeafHeaderCell(_RCol col, SummerDataTableThemeData theme,
+      List<SummerSortSpec> sort, double height) {
+    final spec = _specIn(sort, col.key);
+    final isActive = col.sortable && spec != null;
+    final priority = sort.indexWhere((s) => s.key == col.key);
+    final showPriority =
+        isActive && _isMultiSort && sort.length > 1 && priority >= 0;
 
     Widget content;
     if (col.isSelection) {
@@ -394,6 +585,37 @@ class _SummerDataTableState extends State<SummerDataTable>
     } else if (col.isExpand) {
       content = const SizedBox.shrink();
     } else {
+      Widget labelArea = Flexible(
+        child: DefaultTextStyle(
+          style: theme.headerTextStyle.copyWith(
+            color: isActive ? theme.sortActiveColor : null,
+          ),
+          child: col.label,
+        ),
+      );
+      Widget sortBits = const SizedBox.shrink();
+      if (col.sortable) {
+        sortBits = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const SizedBox(width: 2),
+            _sortIndicator(theme, isActive, spec),
+            if (showPriority)
+              Padding(
+                padding: const EdgeInsets.only(left: 1),
+                child: Text(
+                  '${priority + 1}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: theme.sortActiveColor,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+          ],
+        );
+      }
+
       content = Padding(
         padding: col.padding,
         child: Align(
@@ -401,34 +623,30 @@ class _SummerDataTableState extends State<SummerDataTable>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Flexible(
-                child: DefaultTextStyle(
-                  style: theme.headerTextStyle.copyWith(
-                    color: isActive ? theme.sortActiveColor : null,
+              if (col.sortable)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _onHeaderTap(col),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[labelArea, sortBits],
                   ),
-                  child: col.label,
-                ),
-              ),
-              if (col.sortable) ...<Widget>[
-                const SizedBox(width: 2),
-                _sortIndicator(col, theme, isActive),
+                )
+              else
+                labelArea,
+              if (_hasFilter(col)) ...<Widget>[
+                const SizedBox(width: 4),
+                _filterFunnel(col, theme),
               ],
             ],
           ),
         ),
       );
-      if (col.sortable) {
-        content = GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => _onHeaderSort(col),
-          child: content,
-        );
-      }
     }
 
     Widget cell = Container(
       width: col.width,
-      height: theme.headerHeight,
+      height: height,
       decoration: BoxDecoration(
         color: theme.headerBackgroundColor,
         border: Border(
@@ -472,32 +690,149 @@ class _SummerDataTableState extends State<SummerDataTable>
     return cell;
   }
 
-  Widget _sortIndicator(_RCol col, SummerDataTableThemeData theme, bool isActive) {
-    final ascending = isActive ? widget.sortAscending : null;
+  SummerSortSpec? _specIn(List<SummerSortSpec> sort, String key) {
+    for (final s in sort) {
+      if (s.key == key) return s;
+    }
+    return null;
+  }
+
+  Widget _sortIndicator(
+      SummerDataTableThemeData theme, bool isActive, SummerSortSpec? spec) {
+    final ascending = isActive ? spec!.ascending : null;
     final data = ascending == null
         ? Icons.unfold_more
         : (ascending ? Icons.arrow_drop_up : Icons.arrow_drop_down);
     return Icon(
       data,
       size: 16,
-      color: isActive
-          ? theme.sortActiveColor
-          : const Color(0xFFBFBFBF),
+      color: isActive ? theme.sortActiveColor : const Color(0xFFBFBFBF),
     );
   }
 
-  void _onHeaderSort(_RCol col) {
+  bool _hasFilter(_RCol col) =>
+      col.filters != null &&
+      col.filters!.isNotEmpty &&
+      widget.onFilterChange != null;
+
+  Widget _filterFunnel(_RCol col, SummerDataTableThemeData theme) {
+    final active =
+        (widget.filteredColumnValues?[col.key]?.isNotEmpty ?? false);
+    return Builder(
+      builder: (iconCtx) {
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _openFilter(col, iconCtx),
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Icon(
+              Icons.filter_alt_outlined,
+              size: 15,
+              color: active ? theme.sortActiveColor : const Color(0xFFBFBFBF),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // Sorting
+  // --------------------------------------------------------------------------
+
+  void _onHeaderTap(_RCol col) {
+    if (_isMultiSort) {
+      _onMultiSort(col, HardwareKeyboard.instance.isShiftPressed);
+    } else {
+      _onSingleSort(col);
+    }
+  }
+
+  void _onSingleSort(_RCol col) {
     if (widget.onSortChange == null) return;
-    final key = col.key;
-    if (widget.sortColumnKey == key) {
-      if (widget.sortAscending) {
-        widget.onSortChange!(key, false); // asc -> desc
+    final spec = _specFor(col.key);
+    final dirs = col.sortDirections;
+    if (spec == null) {
+      if (dirs.isNotEmpty) widget.onSortChange!(col.key, dirs.first);
+    } else {
+      final idx = dirs.indexOf(spec.ascending);
+      if (idx >= 0 && idx + 1 < dirs.length) {
+        widget.onSortChange!(col.key, dirs[idx + 1]);
       } else {
-        widget.onSortChange!(null, true); // desc -> cancel
+        widget.onSortChange!(null, true); // cancel
+      }
+    }
+  }
+
+  void _onMultiSort(_RCol col, bool shift) {
+    if (widget.onMultiSortChange == null) return;
+    final list = List<SummerSortSpec>.from(_effectiveSort);
+    final dirs = col.sortDirections;
+    final idx = list.indexWhere((s) => s.key == col.key);
+
+    if (!shift) {
+      if (idx == 0 && list.length == 1) {
+        // cycle the single active column
+        final di = dirs.indexOf(list[0].ascending);
+        if (di >= 0 && di + 1 < dirs.length) {
+          list[0] = SummerSortSpec(key: col.key, ascending: dirs[di + 1]);
+        } else {
+          list.clear();
+        }
+      } else {
+        list
+          ..clear()
+          ..addAll(dirs.isEmpty
+              ? const <SummerSortSpec>[]
+              : <SummerSortSpec>[SummerSortSpec(key: col.key, ascending: dirs.first)]);
       }
     } else {
-      widget.onSortChange!(key, true); // new column -> asc
+      if (idx < 0) {
+        if (dirs.isNotEmpty) {
+          list.add(SummerSortSpec(key: col.key, ascending: dirs.first));
+        }
+      } else {
+        final di = dirs.indexOf(list[idx].ascending);
+        if (di >= 0 && di + 1 < dirs.length) {
+          list[idx] = SummerSortSpec(key: col.key, ascending: dirs[di + 1]);
+        } else {
+          list.removeAt(idx);
+        }
+      }
     }
+    widget.onMultiSortChange!(list);
+  }
+
+  // --------------------------------------------------------------------------
+  // Filtering
+  // --------------------------------------------------------------------------
+
+  void _openFilter(_RCol col, BuildContext iconCtx) {
+    _closeFilter();
+    final rb = iconCtx.findRenderObject();
+    if (rb is! RenderBox) return;
+    final origin = rb.localToGlobal(Offset.zero);
+    final overlay = Overlay.of(context, rootOverlay: true);
+    _filterEntry = OverlayEntry(
+      builder: (_) => _FilterOverlay(
+        origin: origin,
+        iconSize: rb.size,
+        column: col,
+        initialSelected:
+            widget.filteredColumnValues?[col.key] ?? const <Object?>[],
+        onApply: (values) {
+          widget.onFilterChange!(col.key, values);
+          _closeFilter();
+        },
+        onClose: _closeFilter,
+      ),
+    );
+    overlay.insert(_filterEntry!);
+  }
+
+  void _closeFilter() {
+    _filterEntry?.remove();
+    _filterEntry = null;
   }
 
   Widget _buildSelectionHeader(SummerDataTableThemeData theme) {
@@ -527,7 +862,12 @@ class _SummerDataTableState extends State<SummerDataTable>
   // --------------------------------------------------------------------------
 
   Widget _buildBody(BuildContext context, SummerDataTableThemeData theme) {
-    final flat = _flatten();
+    // Most tables have no expandable rows: avoid the O(n) _flatten allocation
+    // and map the list index straight to the row index.
+    final exp = widget.expandable;
+    final useFlat = exp != null;
+    final List<_Flat> flat = useFlat ? _flatten() : const <_Flat>[];
+    final int itemCount = useFlat ? flat.length : widget.source.rowCount;
     return GestureDetector(
       onHorizontalDragUpdate: _onHDrag,
       onHorizontalDragEnd: _onHDragEnd,
@@ -536,19 +876,29 @@ class _SummerDataTableState extends State<SummerDataTable>
         child: ListView.builder(
           controller: _yController,
           padding: EdgeInsets.zero,
-          itemCount: flat.length,
+          itemCount: itemCount,
           itemBuilder: (context, i) {
-            final item = flat[i];
-            if (item.isExpand) {
-              return widget.expandable!.builder(context, item.rowIndex);
+            final bool isExpand;
+            final int rowIndex;
+            if (useFlat) {
+              final item = flat[i];
+              isExpand = item.isExpand;
+              rowIndex = item.rowIndex;
+            } else {
+              isExpand = false;
+              rowIndex = i;
+            }
+            if (isExpand) {
+              return exp!.builder(context, rowIndex);
             }
             return _SummerBodyRow(
               layout: _layout!,
-              rowIndex: item.rowIndex,
+              rowIndex: rowIndex,
               theme: theme,
               source: widget.source,
               selection: widget.selection,
               expandable: widget.expandable,
+              isTree: _isTree,
               xOffset: _xOffset,
               hovered: widget.showHover ? _hoveredRow : null,
               bordered: widget.bordered,
@@ -557,6 +907,7 @@ class _SummerDataTableState extends State<SummerDataTable>
               onDoubleTap: widget.onRowDoubleTap,
               onSelectionToggle: _toggleSelection,
               onExpandToggle: _toggleExpand,
+              onTreeToggle: _onTreeToggle,
             );
           },
         ),
@@ -575,6 +926,11 @@ class _SummerDataTableState extends State<SummerDataTable>
       }
     }
     return out;
+  }
+
+  void _onTreeToggle(int rowIndex) {
+    final s = widget.source;
+    if (s is SummerTreeTableSource) s.toggleExpanded(rowIndex);
   }
 
   // --------------------------------------------------------------------------
@@ -636,8 +992,7 @@ class _SummerDataTableState extends State<SummerDataTable>
 
   void _runFling(double velocity, double maxX) {
     _stopFling();
-    final controller =
-        _fling = AnimationController.unbounded(vsync: this);
+    final controller = _fling = AnimationController.unbounded(vsync: this);
     controller.value = _xOffset.value;
     final sim = FrictionSimulation(0.02, _xOffset.value, velocity);
     controller.addListener(() {
@@ -648,9 +1003,7 @@ class _SummerDataTableState extends State<SummerDataTable>
     controller.animateWith(sim);
   }
 
-  void _stopFling() {
-    _fling?.stop();
-  }
+  void _stopFling() => _fling?.stop();
 
   // --------------------------------------------------------------------------
   // Column resize
@@ -680,7 +1033,6 @@ class _SummerDataTableState extends State<SummerDataTable>
   Widget _buildPagination(SummerDataTableThemeData theme) {
     final current = widget.currentPage ?? 0;
     final total = widget.totalPages ?? 1;
-
     final pages = _pageWindow(current, total);
 
     return Container(
@@ -758,9 +1110,7 @@ class _SummerDataTableState extends State<SummerDataTable>
             style: TextStyle(
               fontSize: 14,
               fontWeight: active ? FontWeight.bold : FontWeight.normal,
-              color: active
-                  ? Colors.white
-                  : theme.cellTextStyle.color,
+              color: active ? Colors.white : theme.cellTextStyle.color,
             ),
           ),
         ),
@@ -775,25 +1125,22 @@ class _SummerDataTableState extends State<SummerDataTable>
 
 class _Layout {
   final List<_RCol> columns;
+  final List<_RCol> left;
+  final List<_RCol> right;
+  final List<_RCol> middle;
+  final List<_HNode> headerRoots;
+  final int depth;
   final double leftWidth;
   final double rightWidth;
   final double middleViewport;
   final double middleContent;
 
-  const _Layout(this.columns, this.leftWidth, this.rightWidth,
+  const _Layout(this.columns, this.left, this.right, this.middle,
+      this.headerRoots, this.depth, this.leftWidth, this.rightWidth,
       this.middleViewport, this.middleContent);
 
   double get maxX =>
       middleContent > middleViewport ? middleContent - middleViewport : 0.0;
-
-  List<_RCol> get left =>
-      columns.where((c) => c.pin == SummerColumnPin.left).toList(growable: false);
-  List<_RCol> get right => columns
-      .where((c) => c.pin == SummerColumnPin.right)
-      .toList(growable: false);
-  List<_RCol> get middle => columns
-      .where((c) => c.pin == SummerColumnPin.none)
-      .toList(growable: false);
 }
 
 class _RCol {
@@ -805,11 +1152,14 @@ class _RCol {
   final double minWidth;
   final double maxWidth;
   final bool sortable;
+  final List<bool> sortDirections;
   final bool resizable;
   final bool ellipsis;
   final AlignmentGeometry alignment;
   final EdgeInsetsGeometry padding;
   final Widget label;
+  final List<SummerColumnFilter>? filters;
+  final bool filterMultiple;
   final int? userColumnIndex;
   final bool isSelection;
   final bool isExpand;
@@ -824,16 +1174,42 @@ class _RCol {
     this.minWidth = 40,
     this.maxWidth = double.infinity,
     this.sortable = false,
+    this.sortDirections = const [true, false],
     this.resizable = false,
     this.ellipsis = false,
     this.alignment = Alignment.centerLeft,
     this.padding = const EdgeInsets.symmetric(horizontal: 12),
     required this.label,
+    this.filters,
+    this.filterMultiple = true,
     this.userColumnIndex,
     this.isSelection = false,
     this.isExpand = false,
     this.baseWidth = 0,
   });
+}
+
+/// A node in the header tree. Leaves reference their resolved [_RCol]; groups
+/// aggregate children. `width` is filled by `_resolveNodeWidth` after the leaf
+/// widths are known.
+class _HNode {
+  final String key;
+  final Widget label;
+  final int level;
+  final bool isLeaf;
+  final _RCol? leaf;
+  final List<_HNode> children;
+  double width;
+
+  _HNode.leaf(this.leaf, this.label, this.level, this.key)
+      : isLeaf = true,
+        children = const <_HNode>[],
+        width = 0;
+
+  _HNode.group(this.children, this.label, this.level, this.key)
+      : isLeaf = false,
+        leaf = null,
+        width = 0;
 }
 
 class _Flat {
@@ -843,16 +1219,235 @@ class _Flat {
 }
 
 // =============================================================================
+// Single translate render box (X-scroll optimization)
+// =============================================================================
+
+/// Translates its child horizontally by `-offset.value` (clamped to `maxX`)
+/// without rebuilding the child subtree — only a repaint is scheduled when the
+/// offset changes. This is what makes horizontal scrolling cheap.
+class _XTranslatedBox extends SingleChildRenderObjectWidget {
+  final ValueListenable<double> offset;
+  final double maxX;
+
+  const _XTranslatedBox({
+    required this.offset,
+    required this.maxX,
+    required super.child,
+  });
+
+  @override
+  _RenderXTranslatedBox createRenderObject(BuildContext context) =>
+      _RenderXTranslatedBox(offset: offset, maxX: maxX);
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderXTranslatedBox renderObject) {
+    renderObject
+      ..offset = offset
+      ..maxX = maxX;
+  }
+}
+
+class _RenderXTranslatedBox extends RenderProxyBox {
+  _RenderXTranslatedBox({
+    required ValueListenable<double> offset,
+    required double maxX,
+  })  : _offset = offset,
+        _maxX = maxX;
+
+  ValueListenable<double> _offset;
+  double _maxX;
+
+  set offset(ValueListenable<double> value) {
+    if (_offset == value) return;
+    _offset.removeListener(_changed);
+    _offset = value;
+    _offset.addListener(_changed);
+    _changed();
+  }
+
+  set maxX(double value) {
+    if (_maxX == value) return;
+    _maxX = value;
+    _changed();
+  }
+
+  double get _dx =>
+      -(_offset.value.clamp(0.0, math.max(0.0, _maxX))).toDouble();
+
+  void _changed() {
+    if (attached) markNeedsPaint();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _offset.addListener(_changed);
+  }
+
+  @override
+  void detach() {
+    _offset.removeListener(_changed);
+    super.detach();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child != null) {
+      context.paintChild(child!, offset + Offset(_dx, 0));
+    }
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    if (child == null) return false;
+    return result.addWithPaintOffset(
+      offset: Offset(_dx, 0),
+      position: position,
+      hitTest: (BoxHitTestResult result, Offset transformed) =>
+          child!.hitTest(result, position: transformed),
+    );
+  }
+}
+
+// =============================================================================
+// Filter dropdown overlay
+// =============================================================================
+
+class _FilterOverlay extends StatefulWidget {
+  final Offset origin;
+  final Size iconSize;
+  final _RCol column;
+  final List<Object?> initialSelected;
+  final ValueChanged<List<Object?>> onApply;
+  final VoidCallback onClose;
+
+  const _FilterOverlay({
+    required this.origin,
+    required this.iconSize,
+    required this.column,
+    required this.initialSelected,
+    required this.onApply,
+    required this.onClose,
+  });
+
+  @override
+  State<_FilterOverlay> createState() => _FilterOverlayState();
+}
+
+class _FilterOverlayState extends State<_FilterOverlay> {
+  late final Set<Object?> _selected = Set<Object?>.from(widget.initialSelected);
+
+  @override
+  Widget build(BuildContext context) {
+    final screenW = MediaQuery.sizeOf(context).width;
+    final left =
+        widget.origin.dx.clamp(0.0, math.max(0.0, screenW - 208)).toDouble();
+    final filters = widget.column.filters ?? const <SummerColumnFilter>[];
+
+    return Stack(
+      children: <Widget>[
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onClose,
+          child: const SizedBox.expand(),
+        ),
+        Positioned(
+          left: left,
+          top: widget.origin.dy + widget.iconSize.height + 4,
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              width: 200,
+              constraints: const BoxConstraints(maxHeight: 320),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Flexible(
+                    child: ListView(
+                      padding: EdgeInsets.zero,
+                      shrinkWrap: true,
+                      children: <Widget>[
+                        for (final f in filters) _item(f),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    child: Row(
+                      children: <Widget>[
+                        TextButton(
+                          onPressed: () => widget.onApply(const <Object?>[]),
+                          child: const Text('重置'),
+                        ),
+                        const Spacer(),
+                        ElevatedButton(
+                          onPressed: () =>
+                              widget.onApply(_selected.toList()),
+                          child: const Text('确定'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _item(SummerColumnFilter f) {
+    final checked = _selected.contains(f.value);
+    return InkWell(
+      onTap: () => _toggle(f.value),
+      child: Row(
+        children: <Widget>[
+          Checkbox(
+            value: checked,
+            onChanged: (_) => _toggle(f.value),
+          ),
+          Expanded(child: Text(f.text)),
+        ],
+      ),
+    );
+  }
+
+  void _toggle(Object? value) {
+    setState(() {
+      if (widget.column.filterMultiple) {
+        if (_selected.contains(value)) {
+          _selected.remove(value);
+        } else {
+          _selected.add(value);
+        }
+      } else {
+        _selected
+          ..clear()
+          ..add(value);
+      }
+    });
+  }
+}
+
+// =============================================================================
 // Body row
 // =============================================================================
 
 class _SummerBodyRow extends StatelessWidget {
+  static const double _treeIndent = 24.0;
+
   final _Layout layout;
   final int rowIndex;
   final SummerDataTableThemeData theme;
   final SummerDataTableSource source;
   final SummerRowSelection? selection;
   final SummerRowExpandable? expandable;
+  final bool isTree;
   final ValueListenable<double> xOffset;
   final ValueNotifier<int?>? hovered;
   final bool bordered;
@@ -861,6 +1456,7 @@ class _SummerBodyRow extends StatelessWidget {
   final ValueChanged<int>? onDoubleTap;
   final void Function(Object? key, bool willSelect)? onSelectionToggle;
   final ValueChanged<int>? onExpandToggle;
+  final ValueChanged<int>? onTreeToggle;
 
   const _SummerBodyRow({
     required this.layout,
@@ -869,6 +1465,7 @@ class _SummerBodyRow extends StatelessWidget {
     required this.source,
     required this.selection,
     required this.expandable,
+    required this.isTree,
     required this.xOffset,
     required this.hovered,
     required this.bordered,
@@ -877,6 +1474,7 @@ class _SummerBodyRow extends StatelessWidget {
     required this.onDoubleTap,
     required this.onSelectionToggle,
     required this.onExpandToggle,
+    required this.onTreeToggle,
   });
 
   @override
@@ -921,6 +1519,7 @@ class _SummerBodyRow extends StatelessWidget {
   }
 
   Widget _middle(BuildContext context) {
+    final layout = this.layout;
     return SizedBox(
       height: theme.rowHeight,
       child: ClipRect(
@@ -928,22 +1527,17 @@ class _SummerBodyRow extends StatelessWidget {
           minWidth: layout.middleContent,
           maxWidth: layout.middleContent,
           alignment: Alignment.centerLeft,
-          child: ListenableBuilder(
-            listenable: xOffset,
-            builder: (context, _) {
-              final x = xOffset.value.clamp(0.0, layout.maxX);
-              return Transform.translate(
-                offset: Offset(-x, 0),
-                child: SizedBox(
-                  width: layout.middleContent,
-                  child: Row(
-                    children: <Widget>[
-                      for (final c in layout.middle) _cell(context, c),
-                    ],
-                  ),
-                ),
-              );
-            },
+          child: _XTranslatedBox(
+            offset: xOffset,
+            maxX: layout.maxX,
+            child: SizedBox(
+              width: layout.middleContent,
+              child: Row(
+                children: <Widget>[
+                  for (final c in layout.middle) _cell(context, c),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -971,6 +1565,18 @@ class _SummerBodyRow extends StatelessWidget {
           child: Align(alignment: col.alignment, child: cell),
         );
       }
+
+      // Tree mode: indent + expand caret on the first user column.
+      if (isTree && col.userColumnIndex == 0) {
+        final tree = source as SummerTreeTableSource;
+        content = Row(
+          children: <Widget>[
+            SizedBox(width: tree.rowDepth(rowIndex) * _treeIndent),
+            _treeCaret(tree),
+            Expanded(child: content),
+          ],
+        );
+      }
     }
 
     return Container(
@@ -985,6 +1591,25 @@ class _SummerBodyRow extends StatelessWidget {
             : null,
       ),
       child: content,
+    );
+  }
+
+  Widget _treeCaret(SummerTreeTableSource tree) {
+    final hasChildren = tree.rowHasChildren(rowIndex);
+    if (!hasChildren) return const SizedBox(width: _treeIndent);
+    final expanded = tree.rowExpanded(rowIndex);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTreeToggle == null ? null : () => onTreeToggle!(rowIndex),
+      child: SizedBox(
+        width: _treeIndent,
+        child: Center(
+          child: Transform.rotate(
+            angle: expanded ? math.pi / 2 : 0,
+            child: theme.expandIcon,
+          ),
+        ),
+      ),
     );
   }
 
