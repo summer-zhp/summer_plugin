@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # summer_plugin
 
 A new Flutter plugin project.
@@ -13,3 +14,6 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 
+=======
+# summer_plugin
+>>>>>>> 5150e49e1fb2d9dff5ae9d0df3512d28cd30e8f1
