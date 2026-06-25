@@ -1,0 +1,7 @@
+{
+  "tool_name": "Read",
+  "tool_input_preview": "{\"file_path\":\"/Users/zhanghuapeng/Desktop/test/flutter_pub_test/summer_plugin/test/widget_test.dart\"}",
+  "error": "File does not exist. Note: your current working directory is /Users/zhanghuapeng/Desktop/test/flutter_pub_test/summer_plugin/example. Did you mean /Users/zhanghuapeng/Desktop/test/flutter_pub_test/summer_plugin/example/test/widget_test.dart?",
+  "timestamp": "2026-06-25T02:31:28.460Z",
+  "retry_count": 1
+}
