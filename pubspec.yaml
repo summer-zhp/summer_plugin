@@ -1,8 +1,10 @@
 name: summer_plugin
-description: 'A new Flutter plugin project.'
+description: A high-performance table for Flutter with virtual scrolling, fixed columns and header, sorting, filtering, selection, tree data and grouped headers.
 version: 0.0.1
-homepage: https://github.com/summer-zhp/summer_plugin.git
-repository: https://github.com/your-username/summer_plugin
+homepage: https://github.com/summer-zhp/summer_plugin
+repository: https://github.com/summer-zhp/summer_plugin
+issue_tracker: https://github.com/summer-zhp/summer_plugin/issues
+license: MIT
 
 environment:
   sdk: ^3.9.2

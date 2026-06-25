@@ -170,6 +170,12 @@
       "type": "file"
     },
     {
+      "path": "pubspec.yaml",
+      "accessCount": 2,
+      "lastAccessed": 1782366748557,
+      "type": "file"
+    },
+    {
       "path": "lib/table/summer_data_cell.dart",
       "accessCount": 1,
       "lastAccessed": 1782360288820,
@@ -179,12 +185,6 @@
       "path": "test/summer_data_table_groups_test.dart",
       "accessCount": 1,
       "lastAccessed": 1782360886173,
-      "type": "file"
-    },
-    {
-      "path": "pubspec.yaml",
-      "accessCount": 1,
-      "lastAccessed": 1782365630408,
       "type": "file"
     },
     {
